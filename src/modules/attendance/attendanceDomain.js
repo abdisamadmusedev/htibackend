@@ -1,4 +1,4 @@
-const STATUSES = ["Present", "Absent", "Late", "Permission", "Free"];
+const STATUSES = ["Present", "Absent", "Late", "Permission", "Free", "InternshipVisit"];
 const SESSIONS = ["BeforeBreak", "AfterBreak"];
 const ADMINS = ["SuperAdmin", "Director", "DeputyDirector", "StudentAffairs"];
 const fail = (message, status = 400) => { throw Object.assign(new Error(message), { status }); };
@@ -14,7 +14,7 @@ const contextKey = (kind, scope, studentId, date, session, lessonId = "legacy") 
 const sessionKey = row => [row.studentId, row.academicYearId, row.termId || 0, row.classId, day(row.attendanceDate), row.attendanceSession].join(":");
 function summarize(records, expected = null) {
   const counts = Object.fromEntries(STATUSES.map(status => [status, records.filter(r => r.status === status).length]));
-  const eligible = records.length - counts.Free;
+  const eligible = records.length - counts.Free - counts.InternshipVisit;
   return { ...counts, recorded: records.length, eligible, notTaken: expected === null ? null : Math.max(0, expected), percentage: eligible ? Number((counts.Present / eligible * 100).toFixed(1)) : null,
     uniqueAbsentDates: [...new Set(records.filter(r => r.status === "Absent").map(r => day(r.attendanceDate)))].sort() };
 }

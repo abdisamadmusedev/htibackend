@@ -103,6 +103,10 @@ async function mark(user, kind, input, outerTransaction = null) {
       if (kind !== "daily" || ![...ADMINS, "AttendanceTaker"].includes(user.role)) fail("Free is available for daily attendance takers and administrators only", 403);
       if (!record.remarks?.trim()) fail("A reason is required in remarks for Free attendance");
     }
+    if (record.status === "InternshipVisit") {
+      if (kind !== "daily" || ![...ADMINS, "AttendanceTaker"].includes(user.role)) fail("Internship Visit is for daily attendance only", 403);
+      if (!record.remarks?.trim()) fail("An internship reason is required in remarks");
+    }
   }
   const M = models();
   const section = await sectionSelection(user, kind, { ...input, classId: scope.classId }, [scope]);
@@ -152,7 +156,7 @@ async function report(user, kind, query) {
       if (!allowed.some(a => a.classId === c.classId)) allowed.push({ classId: c.classId, academicYearId: id(query.academicYearId), departmentId: c.departmentId });
     }
   }
-  if (!scopeWhere.length) return { data: [], details: [], review: [], followUp: [], totals: { students: 0, Present: 0, Absent: 0, Late: 0, Permission: 0, Free: 0, notTaken: null }, formula: "Present / (Present + Absent + Late + Permission) × 100; Free and Not taken excluded" };
+  if (!scopeWhere.length) return { data: [], details: [], review: [], followUp: [], totals: { students: 0, Present: 0, Absent: 0, Late: 0, Permission: 0, Free: 0, InternshipVisit: 0, notTaken: null }, formula: "Present / (Present + Absent + Late + Permission) × 100; Free, Internship Visit and Not taken excluded" };
   const where = { [Op.or]: scopeWhere, attendanceDate: { [Op.gte]: start, [Op.lt]: end }, ...selectionWhere };
   if (section) where.studentId = { [Op.in]: section.studentIds.filter(studentId => !query.studentId || studentId === id(query.studentId)) };
   else if (query.studentId) where.studentId = id(query.studentId);
@@ -196,8 +200,8 @@ async function report(user, kind, query) {
     const group = follow.get(key) || { studentId: r.studentId, subjectId: r.subjectId, missedLessonsWhileDailyPresent: 0 };
     group.missedLessonsWhileDailyPresent++; follow.set(key, group);
   }
-  const totals = { students: new Set(data.map(r => r.studentId)).size, Present: 0, Absent: 0, Late: 0, Permission: 0, Free: 0, notTaken: data.length && data.every(r => r.notTaken !== null) ? data.reduce((n, r) => n + r.notTaken, 0) : null };
+  const totals = { students: new Set(data.map(r => r.studentId)).size, Present: 0, Absent: 0, Late: 0, Permission: 0, Free: 0, InternshipVisit: 0, notTaken: data.length && data.every(r => r.notTaken !== null) ? data.reduce((n, r) => n + r.notTaken, 0) : null };
   for (const row of data) for (const status of STATUSES) totals[status] += row[status];
-  return { totals, context: { classId: query.classId ? id(query.classId) : null, classSectionId: section?.id || null, sectionName: section?.name || null, attendanceDate: query.attendanceDate || null, attendanceSession: query.attendanceSession || null }, data, details: records, review, followUp: [...follow.values()].filter(r => r.missedLessonsWhileDailyPresent >= 2).map(r => ({ ...r, fullName: students.find(s => s.id === r.studentId)?.fullName || null, subjectName: subjectNames.find(s => s.id === r.subjectId)?.name || null, message: "Repeated missed subject lessons during sessions recorded Present in daily attendance; review required." })), formula: "Present / (Present + Absent + Late + Permission) × 100; Free and Not taken excluded" };
+  return { totals, context: { classId: query.classId ? id(query.classId) : null, classSectionId: section?.id || null, sectionName: section?.name || null, attendanceDate: query.attendanceDate || null, attendanceSession: query.attendanceSession || null }, data, details: records, review, followUp: [...follow.values()].filter(r => r.missedLessonsWhileDailyPresent >= 2).map(r => ({ ...r, fullName: students.find(s => s.id === r.studentId)?.fullName || null, subjectName: subjectNames.find(s => s.id === r.subjectId)?.name || null, message: "Repeated missed subject lessons during sessions recorded Present in daily attendance; review required." })), formula: "Present / (Present + Absent + Late + Permission) × 100; Free, Internship Visit and Not taken excluded" };
 }
 module.exports = { scopes, resolveScope, roster, mark, report, requireAdmin, models, plain, sections, sectionSelection };

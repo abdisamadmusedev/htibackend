@@ -86,7 +86,7 @@ const addOptionalColumns = async () => {
 
   if (tableNames.has("attendances")) {
     await queryInterface.changeColumn("attendances", "status", {
-      type: DataTypes.ENUM("Present", "Absent", "Late", "Permission", "Free"),
+      type: DataTypes.ENUM("Present", "Absent", "Late", "Permission", "Free", "InternshipVisit"),
       allowNull: false,
     });
   }

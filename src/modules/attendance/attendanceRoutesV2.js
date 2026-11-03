@@ -81,7 +81,7 @@ for (const kind of ["daily", "lesson"]) {
       const sheet = workbook.addWorksheet(kind === "daily" ? "Daily attendance" : "Subject lessons");
       sheet.addRow([result.formula]);
       sheet.addRow(["Academic year", req.query.academicYearId, "Month", req.query.month, "Filters", JSON.stringify(Object.fromEntries(Object.entries(req.query).filter(([k]) => k !== "format")))]);
-      const keys = ["studentId", "fullName", "admissionNo", "classId", "className", "classSectionId", "sectionName", "termId", "termName", "subjectId", "subjectName", "recorded", "Present", "Absent", "Late", "Permission", "Free", "eligible", "notTaken", "percentage", ...(kind === "daily" ? ["uniqueAbsentDates"] : []), "coverage"];
+      const keys = ["studentId", "fullName", "admissionNo", "classId", "className", "classSectionId", "sectionName", "termId", "termName", "subjectId", "subjectName", "recorded", "Present", "Absent", "Late", "Permission", "Free", "InternshipVisit", "eligible", "notTaken", "percentage", ...(kind === "daily" ? ["uniqueAbsentDates"] : []), "coverage"];
       sheet.addRow(keys);
       for (const row of result.data) sheet.addRow(keys.map(k => Array.isArray(row[k]) ? row[k].join(", ") : row[k] ?? "Unavailable"));
       for (const [name, rows] of [["Recorded details", result.details], ["Review differences", result.review], ["Monthly follow-up", result.followUp]]) {

@@ -1,5 +1,7 @@
 # Daily class and subject lesson attendance
 
+Recurring weekday Internship Visit automation and the `InternshipVisit` (IV) status are documented in [INTERNSHIP_API.md](INTERNSHIP_API.md). IV is counted separately and excluded, along with Free, from classroom attendance percentages.
+
 The Attendance page and student Attendance history have separate daily and lesson views, monthly filters, recorded details, Excel export and Print / Save PDF through the browser dialog. Administrators manage direct class assignments in Attendance. Teachers default to lesson entry.
 
 ## Deployment and historical records

@@ -56,6 +56,7 @@ app.use("/api/subjects", subjectRoutes);
 app.use("/api/teachers", teacherRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/internship-rules", require("./modules/attendance/internshipRoutes"));
 app.use("/api/mobile", mobileRoutes);
 app.use("/api/teacher-assignments", teacherAssignmentRoutes);
 app.use("/api/exams", examRoutes);

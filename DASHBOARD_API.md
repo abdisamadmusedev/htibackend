@@ -1,5 +1,7 @@
 # Dashboard API
 
+Internship Visit: `counts` and `percentages` now also include `InternshipVisit` (display **IV**). `eligible = recorded - Free - InternshipVisit`; `presentPercentage` excludes both. An IV-only day has recorded data but a null classroom attendance rate. See [INTERNSHIP_API.md](INTERNSHIP_API.md) for recurring weekday automation.
+
 `GET /api/dashboard` returns the admin dashboard in one request. Authenticate with `Authorization: Bearer <token>`. No database migration is required. This adds the API; the existing frontend still needs to consume it.
 
 SuperAdmin, Director, DeputyDirector and StudentAffairs can view all departments. HeadDepartment can view only assigned departments. Other roles receive 403, and missing/invalid/inactive sessions receive 401. Department scope is enforced before counting, including nested class breakdowns and attendance totals.

@@ -6,9 +6,9 @@ module.exports = async function migrateAttendance(sequelize) {
   for (const table of ["attendances", "dailyattendances"]) {
     if (!tables.includes(table)) continue;
     const status = (await qi.describeTable(table)).status;
-    if (status && !String(status.type).includes("'Free'")) {
+    if (status && !String(status.type).includes("'InternshipVisit'")) {
       await qi.changeColumn(table, "status", {
-        type: DataTypes.ENUM("Present", "Absent", "Late", "Permission", "Free"),
+        type: DataTypes.ENUM("Present", "Absent", "Late", "Permission", "Free", "InternshipVisit"),
         allowNull: status.allowNull,
         ...(status.defaultValue != null ? { defaultValue: status.defaultValue } : {}),
       });

@@ -68,6 +68,7 @@ test("MySQL migration, uniqueness, concurrent submissions, audit rollback and au
     app.use("/api/attendance", require("../src/modules/attendance/routes/attendanceRoutes"));
     app.use("/api/mobile", require("../src/modules/mobile/routes/mobileRoutes"));
     app.use("/api/dashboard", require("../src/modules/dashboard/dashboardRoutes"));
+    app.use("/api/internship-rules", require("../src/modules/attendance/internshipRoutes"));
     server = await new Promise(resolve => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
     const base = `http://127.0.0.1:${server.address().port}/api`;
     const call = (url, userId, init = {}) => fetch(base + url, { ...init, headers: { "Content-Type": "application/json", ...(userId ? { Authorization: `Bearer ${jwt.sign({ id: userId }, process.env.JWT_SECRET)}` } : {}) } });
@@ -174,6 +175,41 @@ test("MySQL migration, uniqueness, concurrent submissions, audit rollback and au
     await migrate(sequelize); await migrate(sequelize);
     assert.equal((await M.DailyAttendance.findByPk(freeRow.id)).status, "Free");
     assert.equal((await call("/attendance/daily/mark", 7, { method: "POST", body: JSON.stringify({ ...freeInput, records: [{ studentId: 100, status: "Present" }] }) })).status, 409);
+    // Recurring IV rules: preserve saved marks, catch up weekends and remain idempotent.
+    await M.AcademicYear.create({ id: 2025, name: "2025", startDate: "2025-01-01", endDate: "2025-12-31", isActive: true });
+    await M.Student.update({ createdAt: new Date("2025-01-01") }, { where: { id: 100 }, silent: true });
+    const internship = require("../src/modules/attendance/internshipService");
+    const rule = await M.InternshipRule.create({ classId: 10, academicYearId: 2025, classSectionId: 1, weekdays: [6, 0], sessions: ["BeforeBreak", "AfterBreak"], remarks: "Mechanic company", createdBy: 7, effectiveFrom: "2025-01-04", isActive: true });
+    const concurrentIV = await Promise.all([internship.processRule(rule.id, "2025-01-05"), internship.processRule(rule.id, "2025-01-05")]);
+    assert.equal(concurrentIV.reduce((n, count) => n + count, 0), 3);
+    assert.equal(await internship.processRule(rule.id, "2025-01-05"), 0);
+    assert.equal((await M.DailyAttendance.findByPk(freeRow.id)).status, "Free");
+    const automated = await M.DailyAttendance.findAll({ where: { status: "InternshipVisit" } });
+    assert.equal(automated.length, 3);
+    assert.ok(automated.every(r => r.remarks.includes("Automatically marked")));
+    assert.equal(await M.AttendanceAudit.count({ where: { reason: `Automatic Internship Visit (IV), rule #${rule.id}` } }), 3);
+    await M.AcademicYear.update({ isActive: false }, { where: { id: 2025 } });
+    assert.equal(await internship.processRule(rule.id, "2025-01-11"), 0);
+    await M.AcademicYear.update({ isActive: true }, { where: { id: 2025 } });
+    const internshipAuditCreate = M.AttendanceAudit.create;
+    M.AttendanceAudit.create = async () => { throw new Error("IV audit unavailable"); };
+    await assert.rejects(internship.processRule(rule.id, "2025-01-11"), /IV audit unavailable/);
+    M.AttendanceAudit.create = internshipAuditCreate;
+    assert.equal(await M.DailyAttendance.count({ where: { status: "InternshipVisit" } }), 3);
+    assert.equal((await M.InternshipRule.findByPk(rule.id)).processedThrough, "2025-01-05");
+    assert.equal((await call("/internship-rules?academicYearId=2025", 3)).status, 403);
+    assert.equal((await call("/internship-rules?academicYearId=2025", 7)).status, 200);
+    assert.equal((await call(`/internship-rules/${rule.id}`, 7, { method: "PATCH", body: JSON.stringify({ isActive: false }) })).status, 200);
+    assert.equal(await internship.processRule(rule.id, "2025-01-11"), 0);
+    assert.equal((await call(`/internship-rules/${rule.id}`, 7, { method: "PATCH", body: JSON.stringify({ isActive: true }) })).status, 200);
+    assert.equal((await M.InternshipRule.findByPk(rule.id)).processedThrough, null);
+    assert.equal(await internship.processRule(rule.id, "2025-01-11"), 0); // Resume has today's effective date, never the paused period.
+    const invalidSection = { classId: 10, academicYearId: 2025, classSectionId: 3, weekdays: [2], sessions: ["BeforeBreak"], remarks: "Energy visit" };
+    assert.equal((await call("/internship-rules", 7, { method: "POST", body: JSON.stringify(invalidSection) })).status, 400);
+    assert.equal((await call("/internship-rules", 3, { method: "POST", body: JSON.stringify({ ...invalidSection, classSectionId: 1 }) })).status, 403);
+    assert.equal((await call("/internship-rules", 7, { method: "POST", body: JSON.stringify({ ...invalidSection, classSectionId: 1 }) })).status, 201);
+    await migrate(sequelize); await migrate(sequelize);
+    assert.equal(await M.DailyAttendance.count({ where: { status: "InternshipVisit" } }), 3);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     if (sequelize) await sequelize.close();

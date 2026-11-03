@@ -8,6 +8,7 @@ const PORT = process.env.PORT || 5001;
 
 const start = async () => {
   await connectDB();
+  require("./src/modules/attendance/internshipService").startWorker();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 };
 
