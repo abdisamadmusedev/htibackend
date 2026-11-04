@@ -9,6 +9,12 @@ const dateOnly = value => {
   return value;
 };
 const day = value => new Date(value).toISOString().slice(0, 10);
+const schoolToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const attendanceDate = value => {
+  const date = dateOnly(value);
+  if (date > schoolToday()) fail("Future attendance cannot be recorded");
+  return date;
+};
 const contextKey = (kind, scope, studentId, date, session, lessonId = "legacy") =>
   [kind, studentId, scope.academicYearId, scope.termId || 0, scope.classId, date, session, ...(kind === "lesson" ? [scope.subjectId, lessonId] : [])].join(":");
 const sessionKey = row => [row.studentId, row.academicYearId, row.termId || 0, row.classId, day(row.attendanceDate), row.attendanceSession].join(":");
@@ -32,4 +38,4 @@ function attendanceClassAllowed(user, classroom) {
   const shift = String(user.attendanceShift || "all").trim().toLowerCase();
   return !shift || shift === "all" || String(classroom.shift).toLowerCase() === shift;
 }
-module.exports = { STATUSES, SESSIONS, ADMINS, fail, id, dateOnly, day, contextKey, sessionKey, summarize, differences, departmentIds, attendanceClassAllowed };
+module.exports = { STATUSES, SESSIONS, ADMINS, fail, id, dateOnly, day, schoolToday, attendanceDate, contextKey, sessionKey, summarize, differences, departmentIds, attendanceClassAllowed };

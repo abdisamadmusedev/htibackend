@@ -4,7 +4,18 @@ const { sequelize } = require("../../config/mysql");
 const service = require("./attendanceService");
 const { id, dateOnly, day, SESSIONS, fail } = require("./attendanceDomain");
 const router = express.Router();
-const action = fn => async (req, res) => { try { await fn(req, res); } catch (error) { res.status(error.name === "SequelizeUniqueConstraintError" ? 409 : error.status || 500).json({ message: error.name === "SequelizeUniqueConstraintError" ? "Attendance context already exists. Reload before correcting." : error.message }); } };
+const action = fn => async (req, res) => {
+  try { await fn(req, res); }
+  catch (error) {
+    const duplicate = error.name === "SequelizeUniqueConstraintError";
+    const status = duplicate ? 409 : error.status || 500;
+    res.status(status).json({
+      message: duplicate ? "Attendance context already exists. Reload before correcting." : error.message,
+      ...(status === 409 ? { code: "ATTENDANCE_CONFLICT", reviewRequired: true } : {}),
+      ...(error.conflict ? { conflict: error.conflict } : {}),
+    });
+  }
+};
 router.use((req, res, next) => {
   if (!["SuperAdmin", "Director", "DeputyDirector", "StudentAffairs", "HeadDepartment", "AttendanceTaker", "Teacher"].includes(req.user.role)) return res.status(403).json({ message: "Attendance access required" });
   next();

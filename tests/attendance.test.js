@@ -68,6 +68,115 @@ async function setup() {
 }
 const dailyInput = { classId: 10, academicYearId: 2025, termId: 1, date: "2025-01-02", session: "BeforeBreak", records: [{ studentId: 100, status: "Present" }] };
 
+test("past-date roster returns existing marks and revisions; reads and writes reject out-of-term dates", async () => {
+  const { service } = await setup();
+  await service.mark(taker, "daily", dailyInput);
+  const roster = await service.roster({ ...taker, id: 4 }, "daily", dailyInput);
+  assert.equal(roster[0].attendance.status, "Present");
+  assert.equal(roster[0].attendance.revision, 0);
+  for (const date of ["2024-12-31", "2099-01-01", "2025-02-30"]) {
+    await assert.rejects(service.roster(taker, "daily", { ...dailyInput, date }), { status: 400 });
+    await assert.rejects(service.mark(taker, "daily", { ...dailyInput, date }), { status: 400 });
+  }
+});
+
+test("offline sync is idempotent and conflicts roll back the entire batch for review", async () => {
+  const { service, state, M } = await setup();
+  await M.Student.create({ id: 101, classId: 10, academicYearId: 2025, isActive: true });
+  const input = { ...dailyInput, offline: true };
+  await service.mark(taker, "daily", input);
+  await service.mark(taker, "daily", input);
+  assert.equal(state.AttendanceAudit.length, 1);
+  const conflicting = { ...input, correctionReason: "Cannot bypass offline review", versions: { 100: 0 }, records: [
+    { studentId: 101, status: "Present" }, { studentId: 100, status: "Absent" },
+  ] };
+  await assert.rejects(service.mark({ ...taker, id: 4 }, "daily", conflicting), error => {
+    assert.equal(error.status, 409);
+    assert.equal(error.code, "ATTENDANCE_CONFLICT");
+    assert.equal(error.reviewRequired, true);
+    assert.equal(error.conflict.existing.status, "Present");
+    assert.equal(error.conflict.submitted.status, "Absent");
+    assert.equal(error.conflict.date, dailyInput.date);
+    return true;
+  });
+  assert.equal(state.DailyAttendance.length, 1);
+  assert.equal(state.DailyAttendance[0].status, "Present");
+  assert.equal(state.AttendanceAudit.length, 1);
+  await assert.rejects(service.mark(taker, "daily", { ...input, offline: "true" }), { status: 400 });
+  await service.mark(taker, "daily", { ...dailyInput, records: [{ studentId: 100, status: "Absent" }], correctionReason: "Reviewed conflict", versions: { 100: 0 } });
+  assert.equal(state.DailyAttendance[0].status, "Absent");
+});
+
+test("mobile selected-date reads include other takers' submissions and revision metadata", async () => {
+  const module = { exports: {} };
+  const date = "2025-01-02";
+  const classItem = { _id: 10, name: "Class 1", academicYearId: { _id: 2025 }, departmentId: { _id: 5, name: "Nursing" } };
+  const student = { _id: 100, fullName: "Student", classSectionId: null };
+  const attendance = { _id: 1, studentId: 100, takenBy: 99, attendanceSession: "BeforeBreak", status: "Absent", revision: 2, termId: 1, attendanceDate: new Date(`${date}T00:00:00Z`) };
+  const attendanceFilters = [];
+  const query = result => ({ populate() { return this; }, sort: async () => result, then: resolve => Promise.resolve(result).then(resolve) });
+  const attendanceModel = {
+    find: async filters => { attendanceFilters.push(filters); return [attendance]; },
+    aggregate: async pipeline => { attendanceFilters.push(pipeline[0].$match); return [{ _id: { classId: 10, attendanceSession: "BeforeBreak" }, count: 1 }]; },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src/modules/mobile/controllers/mobileAttendanceController.js"), "utf8"), {
+    module, exports: module.exports,
+    require: name => name === "../../attendance/attendanceDomain" ? domain
+      : name === "../../../config/mysql" ? { model: () => attendanceModel }
+      : name.includes("classSections") ? { find: () => query([]) }
+      : name.includes("classes/models") ? { find: () => query([classItem]), findOne: () => query(classItem) }
+      : name.includes("students/models") ? { find: () => query([student]), aggregate: async () => [{ _id: 10, count: 1 }] } : {},
+  });
+  const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  const req = { user: taker, params: { classId: "10" }, query: { date } };
+  await module.exports.getAssignedClassStudents(req, res);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.attendanceDate, date);
+  assert.equal(res.body.students[0].attendanceToday.beforeBreak.status, "Absent");
+  assert.equal(res.body.students[0].attendanceToday.beforeBreak.revision, 2);
+  await module.exports.getAssignedAttendanceClasses(req, res);
+  assert.equal(res.body.attendanceDate, date);
+  assert.equal(res.body.classes[0].attendanceToday.beforeBreak.done, true);
+  for (const filters of attendanceFilters) {
+    assert.equal(filters.takenBy, undefined);
+    assert.equal(filters.attendanceDate.$gte.toISOString(), `${date}T00:00:00.000Z`);
+    assert.equal(filters.attendanceDate.$lt.toISOString(), "2025-01-03T00:00:00.000Z");
+  }
+  for (const handler of [module.exports.getAssignedClassStudents, module.exports.getAssignedAttendanceClasses]) {
+    for (const invalidDate of ["2099-01-01", "2025-02-30", ""]) {
+      await handler({ ...req, query: { date: invalidDate } }, res);
+      assert.equal(res.statusCode, 400);
+    }
+  }
+});
+
+test("mark HTTP responses flag offline and concurrent duplicate conflicts for review", async () => {
+  const { service, sequelize } = await setup();
+  await service.mark(taker, "daily", dailyInput);
+  const express = require("express");
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../src/modules/attendance/attendanceRoutesV2.js"), "utf8"), {
+    module, require: name => name === "express" ? express : name === "sequelize" ? { Op }
+      : name === "../../config/mysql" ? { sequelize } : name === "./attendanceService" ? service : domain,
+  });
+  const app = express();
+  app.use(express.json(), (req, res, next) => { req.user = taker; next(); }, module.exports);
+  const server = await new Promise(resolve => { const server = app.listen(0, "127.0.0.1", () => resolve(server)); });
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/daily/mark`;
+    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...dailyInput, offline: true, records: [{ studentId: 100, status: "Absent" }] }) });
+    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(body.code, "ATTENDANCE_CONFLICT");
+    assert.equal(body.reviewRequired, true);
+    assert.equal(body.conflict.existing.status, "Present");
+    service.mark = async () => { throw Object.assign(new Error("Duplicate"), { name: "SequelizeUniqueConstraintError" }); };
+    const duplicate = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dailyInput) });
+    assert.equal(duplicate.status, 409);
+    assert.equal((await duplicate.json()).reviewRequired, true);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
 test("daily access follows multiple departments and shift, without class assignments", async () => {
   const { service, state, M } = await setup();
   state.AttendanceClassAssignment = [];

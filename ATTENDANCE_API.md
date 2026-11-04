@@ -60,6 +60,29 @@ Load `/api/mobile/attendance/classes/10/students` when class 10 is selected. If 
 
 ## Entry and corrections
 
+### Yesterday, past dates and offline synchronization
+
+Use a real `YYYY-MM-DD` date in Africa/Nairobi. Yesterday and older dates are permitted within the selected term; future dates and dates outside that term are rejected on both the dated roster and marking endpoints. Current department, shift, active class/student and assignment restrictions still apply when syncing later. There is no additional fixed backdating limit.
+
+The mobile app can request `GET /api/mobile/attendance/classes?date=2026-11-03` and `GET /api/mobile/attendance/classes/10/students?date=2026-11-03`, optionally including the existing department or section filters. Both responses include top-level `attendanceDate`. Omitting `date` defaults to today in Africa/Nairobi. For compatibility, fields named `attendanceToday` and `doneToday` describe the requested date when `date` is supplied. Daily records from all takers in the permitted class are included, so another taker's submission is visible. Student session records include `revision`, `updatedAt` and `termId` for review. Use `/daily/roster` with the selected term/date/session for the exact marking context.
+
+Load `GET /api/attendance/daily/roster?classId=10&academicYearId=2026&termId=1&date=2026-11-03&session=BeforeBreak` before marking online. Each student's `attendance` contains the saved mark and revision, or null when unrecorded. Display saved marks rather than creating another submission. Submit to `/daily/mark` with that same date and session; BeforeBreak and AfterBreak are independent.
+
+Offline storage is owned by the mobile app. Cache a previously authorized roster and retain the complete selected context and draft marks locally. The backend cannot know about an unsynced draft. When connected, submit each queued batch through `/daily/mark` (or `/lesson/mark`) with `"offline": true`:
+
+```json
+{
+  "classId": 10, "academicYearId": 2026, "termId": 1,
+  "date": "2026-11-03", "session": "BeforeBreak",
+  "offline": true,
+  "records": [{"studentId": 100, "status": "Present", "remarks": ""}]
+}
+```
+
+New marks are saved atomically. Identical retries succeed without creating duplicates or extra audits. A different existing mark returns HTTP 409 with `code: "ATTENDANCE_CONFLICT"`, `reviewRequired: true`, and `conflict: {studentId, date, session, existing, submitted}`. No marks in that batch are saved. This remains true even if the offline request supplies a correction reason and matching versions. A concurrent unique-key collision also returns 409 with the code/review flag; reload the roster for current details.
+
+On 409, keep the local draft flagged for review and reload the exact dated roster; do not automatically overwrite or discard it. A reviewer can keep the server record or explicitly correct it online using `/mark` without `offline: true`, supplying a correction reason and the newly loaded revisions as described below. Remove a queued draft only after confirmed success or an explicit review decision. Authentication, permission and validation failures also leave the draft pending for resolution.
+
 `GET /daily/roster`: `classId, academicYearId, termId, date, session`.
 
 `GET /lesson/roster`: `assignmentId, date, session, lessonId`.

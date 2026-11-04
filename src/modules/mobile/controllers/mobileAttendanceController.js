@@ -3,7 +3,7 @@ const Class = require("../../classes/models/Class");
 const Student = require("../../students/models/Student");
 const ClassSection = require("../../classSections/models/ClassSection");
 const TeacherAssignment = require("../../teacherAssignments/models/TeacherAssignment");
-const { departmentIds, id, fail } = require("../../attendance/attendanceDomain");
+const { departmentIds, id, fail, attendanceDate, schoolToday } = require("../../attendance/attendanceDomain");
 
 const uniqueIds = (ids) => [
   ...new Set((ids || []).filter(Boolean).map((id) => id.toString())),
@@ -74,13 +74,12 @@ exports.getAssignedAttendanceClasses = async (req, res) => {
 
     const classIds = classes.map((classItem) => classItem._id);
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const selectedDate = attendanceDate(req.query.date === undefined ? schoolToday() : req.query.date);
+    const startOfDate = new Date(`${selectedDate}T00:00:00Z`);
+    const endOfDate = new Date(startOfDate);
+    endOfDate.setUTCDate(endOfDate.getUTCDate() + 1);
 
-    const endOfToday = new Date(startOfToday);
-    endOfToday.setDate(endOfToday.getDate() + 1);
-
-    const [studentCounts, todayAttendanceStats] = await Promise.all([
+    const [studentCounts, selectedAttendanceStats] = await Promise.all([
       Student.aggregate([
         {
           $match: {
@@ -99,10 +98,10 @@ exports.getAssignedAttendanceClasses = async (req, res) => {
         {
           $match: {
             classId: { $in: classIds },
-            takenBy: req.user._id,
+            ...(req.user.role === "Teacher" ? { takenBy: req.user._id || req.user.id } : {}),
             attendanceDate: {
-              $gte: startOfToday,
-              $lt: endOfToday,
+              $gte: startOfDate,
+              $lt: endOfDate,
             },
           },
         },
@@ -123,7 +122,7 @@ exports.getAssignedAttendanceClasses = async (req, res) => {
     );
     const attendanceStatsByClassId = new Map();
 
-    todayAttendanceStats.forEach((item) => {
+    selectedAttendanceStats.forEach((item) => {
       const classId = item._id.classId.toString();
       const stats = attendanceStatsByClassId.get(classId) || {
         BeforeBreak: 0,
@@ -205,6 +204,7 @@ exports.getAssignedAttendanceClasses = async (req, res) => {
 
     res.status(200).json({
       message: "Assigned classes fetched successfully",
+      attendanceDate: selectedDate,
       summary: {
         departments: departmentsById.size,
         classes: classData.length,
@@ -246,13 +246,12 @@ exports.getAssignedClassStudents = async (req, res) => {
       return res.status(404).json({ message: "Section not found in this class" });
     }
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const selectedDate = attendanceDate(req.query.date === undefined ? schoolToday() : req.query.date);
+    const startOfDate = new Date(`${selectedDate}T00:00:00Z`);
+    const endOfDate = new Date(startOfDate);
+    endOfDate.setUTCDate(endOfDate.getUTCDate() + 1);
 
-    const endOfToday = new Date(startOfToday);
-    endOfToday.setDate(endOfToday.getDate() + 1);
-
-    const [students, todayAttendance] = await Promise.all([
+    const [students, selectedAttendance] = await Promise.all([
       Student.find({
         classId: classItem._id,
         ...(sectionId ? { classSectionId: sectionId } : {}),
@@ -260,10 +259,10 @@ exports.getAssignedClassStudents = async (req, res) => {
       }).sort({ fullName: 1 }),
       Attendance.find({
         classId: classItem._id,
-        takenBy: req.user._id,
+        ...(req.user.role === "Teacher" ? { takenBy: req.user._id || req.user.id } : {}),
         attendanceDate: {
-          $gte: startOfToday,
-          $lt: endOfToday,
+          $gte: startOfDate,
+          $lt: endOfDate,
         },
       }),
     ]);
@@ -273,6 +272,7 @@ exports.getAssignedClassStudents = async (req, res) => {
 
     res.status(200).json({
       message: "Class students fetched successfully",
+      attendanceDate: selectedDate,
       class: {
         id: classItem._id,
         name: classItem.name,
@@ -304,7 +304,7 @@ exports.getAssignedClassStudents = async (req, res) => {
       sections: sections.map(section => ({ id: section._id, name: section.name })),
       selectedSectionId: sectionId,
       students: students.map((student) => {
-        const studentAttendance = todayAttendance
+        const studentAttendance = selectedAttendance
           .filter(
             (attendance) =>
               attendance.studentId.toString() === student._id.toString()
@@ -317,6 +317,9 @@ exports.getAssignedClassStudents = async (req, res) => {
                 status: attendance.status,
                 remarks: attendance.remarks,
                 attendanceDate: attendance.attendanceDate,
+                revision: attendance.revision,
+                updatedAt: attendance.updatedAt,
+                termId: attendance.termId,
               },
             }),
             {}

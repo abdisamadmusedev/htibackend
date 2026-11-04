@@ -1,6 +1,6 @@
 const { Op } = require("sequelize");
 const { initializeModels, sequelize } = require("../../config/mysql");
-const { STATUSES, SESSIONS, ADMINS, fail, id, dateOnly, day, contextKey, summarize, differences, attendanceClassAllowed } = require("./attendanceDomain");
+const { STATUSES, SESSIONS, ADMINS, fail, id, dateOnly, day, attendanceDate, contextKey, summarize, differences, attendanceClassAllowed } = require("./attendanceDomain");
 const models = () => initializeModels();
 const plain = row => row?.get ? row.get({ plain: true }) : row;
 const isAdmin = user => ADMINS.includes(user.role);
@@ -54,8 +54,7 @@ async function resolveScope(user, kind, input) {
 }
 function entryContext(kind, input) {
   requireKind(kind);
-  const date = dateOnly(input.date);
-  if (date > new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Nairobi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())) fail("Future attendance cannot be recorded");
+  const date = attendanceDate(input.date);
   const session = input.session || "BeforeBreak";
   if (!SESSIONS.includes(session)) fail("Invalid attendance session");
   const lessonId = String(input.lessonId || "legacy").trim();
@@ -83,6 +82,8 @@ async function roster(user, kind, input) {
   const scope = await resolveScope(user, kind, input);
   const { date, session, lessonId } = entryContext(kind, input);
   const M = models();
+  const term = scope.termId ? await M.Term.findByPk(scope.termId) : null;
+  if (term && (date < day(term.startDate) || date > day(term.endDate))) fail("Date is outside the assigned term");
   const section = await sectionSelection(user, kind, { ...input, classId: scope.classId }, [scope]);
   const students = await M.Student.findAll({ where: { classId: scope.classId, academicYearId: scope.academicYearId, isActive: true, ...(section ? { classSectionId: section.id } : {}) }, order: [["fullName", "ASC"]] });
   const table = kind === "daily" ? M.DailyAttendance : M.Attendance;
@@ -90,6 +91,7 @@ async function roster(user, kind, input) {
   return students.map(student => ({ ...plain(student), attendance: records.find(r => r.studentId === student.id) || null }));
 }
 async function mark(user, kind, input, outerTransaction = null) {
+  if (input.offline !== undefined && typeof input.offline !== "boolean") fail("offline must be a boolean");
   const scope = await resolveScope(user, kind, input);
   const { date, session, lessonId } = entryContext(kind, input);
   const records = input.records;
@@ -124,6 +126,12 @@ async function mark(user, kind, input, outerTransaction = null) {
       const values = { revision: existing ? existing.revision + 1 : 0, contextKey: key, studentId: id(record.studentId), academicYearId: scope.academicYearId, termId: scope.termId || null, classId: scope.classId, departmentId: scope.departmentId, attendanceDate: new Date(`${date}T00:00:00Z`), attendanceSession: session, status: record.status, remarks: record.remarks || "", takenBy: user.id,
         ...(kind === "lesson" ? { subjectId: scope.subjectId, teacherAssignmentId: existing?.teacherAssignmentId || scope.id, lessonId } : {}) };
       if (existing && existing.status === values.status && (existing.remarks || "") === values.remarks) { saved.push(existing); continue; }
+      if (existing && input.offline) {
+        throw Object.assign(new Error("Offline attendance conflicts with an existing submission. Reload and review before correcting."), {
+          status: 409, code: "ATTENDANCE_CONFLICT", reviewRequired: true,
+          conflict: { studentId: values.studentId, date, session, ...(kind === "lesson" ? { lessonId } : {}), existing: plain(existing), submitted: { status: values.status, remarks: values.remarks } },
+        });
+      }
       if (existing && (typeof input.correctionReason !== "string" || !input.correctionReason.trim())) fail("A correction reason is required for changes to recorded attendance", 409);
       if (existing && input.versions?.[record.studentId] !== existing.revision) fail("Attendance changed since it was loaded. Reload before correcting.", 409);
       const before = existing ? plain(existing) : null;
