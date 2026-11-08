@@ -212,4 +212,50 @@ async function report(user, kind, query) {
   for (const row of data) for (const status of STATUSES) totals[status] += row[status];
   return { totals, context: { classId: query.classId ? id(query.classId) : null, classSectionId: section?.id || null, sectionName: section?.name || null, attendanceDate: query.attendanceDate || null, attendanceSession: query.attendanceSession || null }, data, details: records, review, followUp: [...follow.values()].filter(r => r.missedLessonsWhileDailyPresent >= 2).map(r => ({ ...r, fullName: students.find(s => s.id === r.studentId)?.fullName || null, subjectName: subjectNames.find(s => s.id === r.subjectId)?.name || null, message: "Repeated missed subject lessons during sessions recorded Present in daily attendance; review required." })), formula: "Present / (Present + Absent + Late + Permission) × 100; Free, Internship Visit and Not taken excluded" };
 }
-module.exports = { scopes, resolveScope, roster, mark, report, requireAdmin, models, plain, sections, sectionSelection };
+async function absenceReport(user, query) {
+  const selectedDate = dateOnly(query.date || query.attendanceDate);
+  // Reuse the monthly report's authorization, but retain the whole month's history.
+  const monthly = await report(user, "daily", {
+    academicYearId: query.academicYearId, termId: query.termId,
+    departmentId: query.departmentId, classId: query.classId,
+    classSectionId: query.classSectionId, studentId: query.studentId,
+    month: selectedDate.slice(0, 7),
+  });
+  const M = models();
+  const departments = await M.Department.findAll();
+  const selected = monthly.details.filter(r => day(r.attendanceDate) === selectedDate && r.status === "Absent" && SESSIONS.includes(r.attendanceSession));
+  const groups = new Map();
+  for (const record of selected) {
+    const key = `${record.departmentId}:${record.studentId}`;
+    if (groups.has(key)) continue;
+    const student = monthly.data.find(r => r.studentId === record.studentId && r.classId === record.classId);
+    const records = monthly.details.filter(r => r.studentId === record.studentId && r.departmentId === record.departmentId && day(r.attendanceDate) <= selectedDate);
+    const dates = [...new Set(records.filter(r => r.status === "Absent" && SESSIONS.includes(r.attendanceSession)).map(r => day(r.attendanceDate)))].sort();
+    const history = dates.map(date => {
+      const sessions = [...new Set(records.filter(r => day(r.attendanceDate) === date && r.status === "Absent" && SESSIONS.includes(r.attendanceSession)).map(r => r.attendanceSession))].sort();
+      return { date, sessions, absentDays: sessions.length / 2 };
+    });
+    const sessionStatus = session => {
+      const statuses = [...new Set(records.filter(r => day(r.attendanceDate) === selectedDate && r.attendanceSession === session).map(r => r.status))];
+      return statuses.length > 1 ? "Review required" : statuses[0] || "Not recorded";
+    };
+    groups.set(key, {
+      studentId: record.studentId, fullName: student?.fullName || "Unknown", admissionNo: student?.admissionNo || "",
+      className: student?.className || String(record.classId), departmentId: record.departmentId,
+      beforeBreak: sessionStatus("BeforeBreak"), afterBreak: sessionStatus("AfterBreak"),
+      selectedDateAbsentDays: history.find(r => r.date === selectedDate).absentDays,
+      monthlyAbsentDays: history.reduce((sum, r) => sum + r.absentDays, 0), absentDatesCount: history.length, history,
+    });
+  }
+  const data = [...groups.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return {
+    selectedDate, historyStart: `${selectedDate.slice(0, 7)}-01`, historyEnd: selectedDate,
+    formula: "One absent daily session = 0.5 day; both sessions = 1 day. Missing records are not absences. Lesson attendance is excluded.",
+    totals: { students: new Set(data.map(r => r.studentId)).size, fullDay: data.filter(r => r.selectedDateAbsentDays === 1).length, halfDay: data.filter(r => r.selectedDateAbsentDays === 0.5).length },
+    departments: [...new Set(data.map(r => r.departmentId))].map(departmentId => ({
+      departmentId, departmentName: departments.find(d => d.id === departmentId)?.name || `Department ${departmentId}`,
+      students: data.filter(r => r.departmentId === departmentId),
+    })),
+  };
+}
+module.exports = { absenceReport, scopes, resolveScope, roster, mark, report, requireAdmin, models, plain, sections, sectionSelection };

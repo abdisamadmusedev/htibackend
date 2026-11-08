@@ -427,3 +427,41 @@ test("date and session filters constrain expected counts and never manufacture m
   await assert.rejects(service.report(admin, "daily", { ...sectionQuery, attendanceDate: "2025-02-01" }), { status: 400 });
   await assert.rejects(service.report(admin, "daily", { ...sectionQuery, attendanceSession: "Invalid" }), { status: 400 });
 });
+
+test("department absence report counts half days, retains history, excludes later dates and never changes records", async () => {
+  const { service, M, state } = await setup();
+  await M.Department.create({ id: 5, name: "Computing" });
+  for (const [date, session, status] of [
+    ["2025-01-02", "BeforeBreak", "Absent"],
+    ["2025-01-03", "AfterBreak", "Absent"],
+    ["2025-01-06", "BeforeBreak", "Absent"],
+    ["2025-01-06", "AfterBreak", "Absent"],
+    ["2025-01-07", "BeforeBreak", "Absent"],
+    ["2025-01-07", "AfterBreak", "Present"],
+    ["2025-01-08", "BeforeBreak", "Absent"],
+  ]) await service.mark(taker, "daily", { ...dailyInput, date, session, records: [{ studentId: 100, status }] });
+  await M.Student.create({ id: 101, fullName: "Present student", classId: 10, academicYearId: 2025 });
+  await M.Student.create({ id: 102, fullName: "Other department", classId: 11, academicYearId: 2025 });
+  await M.DailyAttendance.create({ studentId: 102, classId: 11, departmentId: 6, termId: 1, academicYearId: 2025, attendanceDate: new Date("2025-01-07"), attendanceSession: "BeforeBreak", status: "Absent" });
+  const before = JSON.stringify(state);
+  const result = await service.absenceReport(admin, { academicYearId: 2025, departmentId: 5, date: "2025-01-07" });
+  assert.equal(result.departments.length, 1);
+  assert.equal(result.departments[0].departmentName, "Computing");
+  const student = result.departments[0].students[0];
+  assert.equal(result.totals.students, 1);
+  assert.equal(student.beforeBreak, "Absent");
+  assert.equal(student.afterBreak, "Present");
+  assert.equal(student.selectedDateAbsentDays, 0.5);
+  assert.equal(student.monthlyAbsentDays, 2.5);
+  assert.equal(student.absentDatesCount, 4);
+  assert.equal(student.history.length, 4);
+  const partial = await service.absenceReport(admin, { academicYearId: 2025, date: "2025-01-02" });
+  assert.equal(partial.departments[0].students[0].afterBreak, "Not recorded");
+  const restricted = await service.absenceReport({ id: 8, role: "HeadDepartment", departmentId: 5 }, { academicYearId: 2025, date: "2025-01-07", departmentId: 6 });
+  assert.equal(restricted.departments.length, 0);
+  const empty = await service.absenceReport(admin, { academicYearId: 2025, date: "2025-01-01" });
+  assert.equal(empty.totals.students, 0);
+  assert.equal(JSON.stringify(state), before);
+  await assert.rejects(service.absenceReport(admin, { academicYearId: 2025, date: "2025-02-30" }), { status: 400 });
+});
+

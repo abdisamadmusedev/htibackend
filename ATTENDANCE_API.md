@@ -2,6 +2,36 @@
 
 Recurring weekday Internship Visit automation and the `InternshipVisit` (IV) status are documented in [INTERNSHIP_API.md](INTERNSHIP_API.md). IV is counted separately and excluded, along with Free, from classroom attendance percentages.
 
+## Department absence report
+
+`GET /api/attendance/daily/absence-report?academicYearId=2026&date=2026-11-07`
+
+Requires the usual Bearer token and daily attendance permissions. Optional filters:
+`departmentId`, `classId`, `classSectionId`, `termId`, `studentId`.
+Omit `departmentId` for all permitted departments. The caller supplies the selected
+date (the UI can default it to yesterday in Africa/Nairobi).
+
+JSON returns `selectedDate`, `historyStart`, `historyEnd`, `formula`, `totals`
+(students, fullDay, halfDay), and `departments`. Each department contains its ID,
+name and students absent in at least one daily session on the selected date.
+Students include admission number, name, class, before/after-break statuses,
+`selectedDateAbsentDays`, `monthlyAbsentDays`, `absentDatesCount`, and `history`
+entries with date, missed sessions and absent days. History runs from the start
+of the selected month through the selected date, inclusive. Each distinct absent
+daily session contributes 0.5 day, capped at one day per date. Missing sessions
+show `Not recorded`; conflicting statuses show `Review required`.
+
+Append `&format=pdf` for a printable PDF with each department starting on a new
+page, or `&format=xlsx` for an Excel workbook with a worksheet per department.
+No recorded absences returns an empty department list and zero totals.
+
+This is a read-only report: no migration or attendance changes are performed.
+Only DailyAttendance records are used. Historical lesson-only attendance is not
+converted into daily attendance. Existing monthly endpoints retain their session
+counts and behavior. A frontend report button/date picker must call this endpoint
+to expose it in the application UI.
+
+
 The Attendance page and student Attendance history have separate daily and lesson views, monthly filters, recorded details, Excel export and Print / Save PDF through the browser dialog. Administrators manage direct class assignments in Attendance. Teachers default to lesson entry.
 
 ## Deployment and historical records
@@ -42,21 +72,21 @@ All requests require `Authorization: Bearer <token>`:
 3. `GET /api/mobile/attendance/classes/:classId/students` returns the class and student roster only when the class belongs to an assigned department and permitted shift.
 4. `GET /api/attendance/daily/scopes?departmentId=5` supplies valid class/year/term contexts. Select the matching context before requesting `/api/attendance/daily/roster` or submitting `/api/attendance/daily/mark` as documented below.
 
-Department and shift restrictions apply to daily roster, submission, corrections, reports, audit access and generic directory endpoints. A stale class assignment cannot bypass them. Generic `GET /api/classes?departmentId=5` also supports department filtering. The client should display “No department assigned. Please contact your administrator.” when the assigned-department list is empty.
+Department and shift restrictions apply to daily roster, submission, corrections, reports, audit access and generic directory endpoints. A stale class assignment cannot bypass them. Generic `GET /api/classes?departmentId=5` also supports department filtering. The client should display â€œNo department assigned. Please contact your administrator.â€ when the assigned-department list is empty.
 
 ### Sections in the mobile roster
 
 The student roster response also contains `sections: [{id, name}]` (active sections belonging to that class), `selectedSectionId` (null for all sections), and `classSectionId` on every student (null when unassigned).
 
-Load `/api/mobile/attendance/classes/10/students` when class 10 is selected. If `sections` is empty, display its students directly. Otherwise show an “All Sections” option plus the returned sections. Selecting section 1 loads `/api/mobile/attendance/classes/10/students?classSectionId=1`. Omit the parameter for All Sections, including students without a section. The selected section filters students only; the response still includes all active section choices. Invalid section IDs return 400; inactive sections or sections belonging to another class return 404. Class department and shift authorization is checked before section lookup.
+Load `/api/mobile/attendance/classes/10/students` when class 10 is selected. If `sections` is empty, display its students directly. Otherwise show an â€œAll Sectionsâ€ option plus the returned sections. Selecting section 1 loads `/api/mobile/attendance/classes/10/students?classSectionId=1`. Omit the parameter for All Sections, including students without a section. The selected section filters students only; the response still includes all active section choices. Invalid section IDs return 400; inactive sections or sections belonging to another class return 404. Class department and shift authorization is checked before section lookup.
 
 ## Assignments and scopes
 
 - `GET /class-assignees`: administrators list eligible users' IDs/names, without passwords or other account details.
-- `GET /class-assignments?academicYearId=…`: administrators list all direct assignments; takers see their own.
+- `GET /class-assignments?academicYearId=â€¦`: administrators list all direct assignments; takers see their own.
 - `POST /class-assignments`: `{userId, classId, academicYearId, termId}`. Validates an active AttendanceTaker and matching class/year/term. Repeated assignment reactivates the existing context.
 - `DELETE /class-assignments/:id`: audited revocation, not physical deletion.
-- `GET /daily/scopes?academicYearId=…` and `/lesson/scopes?academicYearId=…`: permitted contexts and display names. `history=1` includes inactive teaching assignments in administrative report filters; recording still requires an active assignment.
+- `GET /daily/scopes?academicYearId=â€¦` and `/lesson/scopes?academicYearId=â€¦`: permitted contexts and display names. `history=1` includes inactive teaching assignments in administrative report filters; recording still requires an active assignment.
 
 ## Entry and corrections
 
@@ -99,7 +129,7 @@ Each roster student has current `attendance`, including `id`/`updatedAt`/`revisi
 }
 ```
 
-`POST /lesson/mark` uses `assignmentId` instead of submitted class/year/term and also accepts `lessonId`, such as `P1` or `P2`. Use the stable timetable period ID (1–64 letters, digits, hyphens or underscores). Multiple lessons within the same break session must have separate IDs. Omission defaults to `legacy` for older clients. New lesson records always identify their teacher assignment.
+`POST /lesson/mark` uses `assignmentId` instead of submitted class/year/term and also accepts `lessonId`, such as `P1` or `P2`. Use the stable timetable period ID (1â€“64 letters, digits, hyphens or underscores). Multiple lessons within the same break session must have separate IDs. Omission defaults to `legacy` for older clients. New lesson records always identify their teacher assignment.
 
 Both workflows accept Present, Absent, Late, Permission and optional remarks up to 2,000 characters. Daily attendance additionally supports Free (F), as described below. Duplicate students, invalid dates/statuses/sessions, out-of-term dates and students outside the active class/year or selected section are rejected. Batches are atomic; lesson writes never touch daily records.
 
@@ -152,7 +182,7 @@ Responses include:
 - `details`: recorded sessions or lessons with period IDs, status and remarks.
 - `review`: lesson Absent records matching daily Present for the same student/year/term/class/date/session.
 - `followUp`: student/subject patterns with at least two such recorded differences in the month. Messages request review without assuming motives.
-- `formula`: **Present / (Present + Absent + Late + Permission) × 100**. Late and Permission remain in the denominator; Free and Not taken are excluded. Empty denominators return null, displayed as a dash.
+- `formula`: **Present / (Present + Absent + Late + Permission) Ã— 100**. Late and Permission remain in the denominator; Free and Not taken are excluded. Empty denominators return null, displayed as a dash.
 
 Add `format=xlsx` for an actual Excel workbook containing summary, details, differences, follow-up and formula/filter metadata. The portal prints either selected view or saves it as PDF using the browser dialog.
 
@@ -165,7 +195,7 @@ The repository previously had no persisted school calendar/timetable. Administra
 Payload: `{kind, academicYearId, termId, classId, month, source, calendar, entries}`.
 
 - `kind` is daily or lesson; `month` is YYYY-MM. `source` identifies the approved calendar/schedule and revision.
-- `calendar` must enumerate **every date in the month exactly once**, each as `{date, isSchoolDay}`. Explicitly mark weekends/holidays/closures false according to the school calendar. No Monday–Friday assumption is made.
+- `calendar` must enumerate **every date in the month exactly once**, each as `{date, isSchoolDay}`. Explicitly mark weekends/holidays/closures false according to the school calendar. No Mondayâ€“Friday assumption is made.
 - `entries` is the complete dated set of expected sessions/lessons for that class/term/month, including future dates. Each has `{date, session, endsAt}`. `endsAt` must include a timezone and fall on the school date in Africa/Nairobi.
 - Lesson entries additionally require `{assignmentId, lessonId}` matching class/year/term and the stable period used when recording attendance.
 - Entries on closed dates or outside the term are rejected. Unscheduled subjects/periods must not have entries. A known empty timetable is a complete calendar with empty entries.

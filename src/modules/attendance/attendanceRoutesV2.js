@@ -24,6 +24,59 @@ router.get("/class-assignees", action(async (req, res) => {
   service.requireAdmin(req.user);
   res.json({ data: await service.models().User.findAll({ where: { role: "AttendanceTaker", isActive: true }, attributes: ["id", "fullName"] }) });
 }));
+router.get("/daily/absence-report", action(async (req, res) => {
+  const result = await service.absenceReport(req.user, req.query);
+  if (req.query.format === "xlsx") {
+    const workbook = new (require("exceljs").Workbook)();
+    const departments = result.departments.length ? result.departments : [{ departmentName: "No absences", students: [] }];
+    for (const [index, department] of departments.entries()) {
+      const sheet = workbook.addWorksheet(`Department ${index + 1}`);
+      sheet.addRow(["STUDENT ABSENCE REPORT", department.departmentName]);
+      sheet.addRow(["Selected date", result.selectedDate, "History", result.historyStart, result.historyEnd]);
+      sheet.addRow([result.formula]);
+      sheet.addRow(["Student ID", "Name", "Class", "Before break", "After break", "Selected date absent days", "Monthly absent days", "Absent dates count", "Monthly history"]);
+      for (const student of department.students) sheet.addRow([
+        student.admissionNo, student.fullName, student.className, student.beforeBreak, student.afterBreak,
+        student.selectedDateAbsentDays, student.monthlyAbsentDays, student.absentDatesCount,
+        student.history.map(h => `${h.date}: ${h.sessions.join(" + ")} (${h.absentDays})`).join("; "),
+      ]);
+      sheet.columns.forEach(column => { column.width = 24; });
+      sheet.pageSetup = { orientation: "landscape", fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+    }
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=department-absences-${result.selectedDate}.xlsx`);
+    await workbook.xlsx.write(res); res.end(); return;
+  }
+  if (req.query.format === "pdf") {
+    const PDFDocument = require("pdfkit");
+    const document = new PDFDocument({ size: "A4", margin: 40 });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=department-absences-${result.selectedDate}.pdf`);
+    document.pipe(res);
+    const heading = name => {
+      document.fontSize(17).text("STUDENT ABSENCE REPORT");
+      document.fontSize(12).text(name);
+      document.fontSize(10).text(`Selected date: ${result.selectedDate} | History: ${result.historyStart} to ${result.historyEnd}`);
+      document.moveDown().fontSize(9).text(result.formula).moveDown();
+    };
+    if (!result.departments.length) { heading("All selected departments"); document.text("No recorded absences on the selected date."); }
+    for (const [index, department] of result.departments.entries()) {
+      if (index) document.addPage();
+      heading(department.departmentName);
+      document.text(`Absent students: ${department.students.length}`).moveDown();
+      for (const student of department.students) {
+        if (document.y > 650) { document.addPage(); heading(`${department.departmentName} (continued)`); }
+        document.fontSize(11).text(`${student.fullName} | ${student.admissionNo} | ${student.className}`);
+        document.fontSize(9).text(`Before break: ${student.beforeBreak} | After break: ${student.afterBreak}`);
+        document.text(`Selected date: ${student.selectedDateAbsentDays} day(s) | Monthly total: ${student.monthlyAbsentDays} day(s) across ${student.absentDatesCount} date(s)`);
+        document.text(`History: ${student.history.map(h => `${h.date}: ${h.sessions.map(s => s === "BeforeBreak" ? "Before break" : "After break").join(" + ")} (${h.absentDays})`).join("; ")}`).moveDown();
+      }
+      document.moveDown().text("Prepared by: ____________________    Signature: ____________________");
+    }
+    document.end(); return;
+  }
+  res.json(result);
+}));
 router.get("/daily", action(async (req, res) => {
   const allowed = await service.scopes(req.user, "daily", req.query);
   const section = await service.sectionSelection(req.user, "daily", req.query, allowed);
